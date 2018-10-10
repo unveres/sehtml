@@ -25,6 +25,32 @@ if (is_escseq) {                          \
   break;                                  \
 }
 
+#define STRING_INVERT_TYPE(type) \
+  ((type) == DOUBLE_QUOTE_STRING ? SINGLE_QUOTE_STRING : DOUBLE_QUOTE_STRING)
+
+#define STRING_TEST()                                                         \
+if (token_type == SINGLE_QUOTE_STRING || token_type == DOUBLE_QUOTE_STRING) { \
+  fputc(ch, out);                                                             \
+  break;                                                                      \
+}
+
+#define STRING_SUPPORT(type)                        \
+if (token_type == TOKEN_BEGINNING && mode == VALUE) \
+  fputc('=', out);                                  \
+                                                    \
+fputc(ch, out);                                     \
+                                                    \
+if (token_type == STRING_INVERT_TYPE(type))         \
+  break;                                            \
+                                                    \
+if (token_type == type) {                           \
+  token_type = NORMAL;                              \
+  break;                                            \
+}                                                   \
+                                                    \
+token_type = type;                                  \
+break;
+
 void translate(FILE *out, int convert_depth)
 {
   char  tagname[256] = { 0 };
@@ -43,7 +69,10 @@ void translate(FILE *out, int convert_depth)
   enum {
     NORMAL,
     TOKEN_BEGINNING,
-    PROPERTY_TOKEN
+    PROPERTY_TOKEN,
+    SINGLE_QUOTE_STRING,
+    DOUBLE_QUOTE_STRING,
+    COMMENT
   } token_type;
 
   mode = NONE;
@@ -53,7 +82,21 @@ void translate(FILE *out, int convert_depth)
     mode = TAG;
 
   while ((ch = getchar()) != EOF) {
+    if (token_type == COMMENT) {
+      if (ch == '\n')
+        token_type = TOKEN_BEGINNING;
+
+      continue;
+    }
+
     if (isspace(ch)) {
+      if (  token_type == SINGLE_QUOTE_STRING
+         || token_type == DOUBLE_QUOTE_STRING) {
+
+        fputc(ch, out);
+        continue;
+      }
+
       if (token_type != TOKEN_BEGINNING) {
         if (mode == TAG) {
           indent(out, convert_depth);
@@ -72,9 +115,10 @@ void translate(FILE *out, int convert_depth)
     switch (ch) {
       case ':':
         ESCSEQ_TEST();
+        STRING_TEST();
 
         if (mode != PROPERTY) {
-          error("':' not escaped");       /* ':'' allowed only in properties */
+          error("':' not escaped");        /* ':' allowed only in properties */
           break;
         }
 
@@ -86,6 +130,7 @@ void translate(FILE *out, int convert_depth)
 
       case '(':
         ESCSEQ_TEST();
+        STRING_TEST();
 
         if (mode == NONE) {
           fprintf(out, "<!DOCTYPE html>\n");
@@ -104,6 +149,7 @@ void translate(FILE *out, int convert_depth)
 
       case ')':
         ESCSEQ_TEST();
+        STRING_TEST();
 
         if (mode == NONE) {
           error("')' sign all of a sudden");
@@ -150,6 +196,20 @@ void translate(FILE *out, int convert_depth)
         is_escseq = 1;
         break;
 
+      case '\"':
+        ESCSEQ_TEST();
+        STRING_SUPPORT(DOUBLE_QUOTE_STRING);
+
+      case '\'':
+        ESCSEQ_TEST();
+        STRING_SUPPORT(SINGLE_QUOTE_STRING);
+
+      case ';':
+        ESCSEQ_TEST();
+        STRING_TEST();
+        token_type = COMMENT;
+        break;
+
       default:
         if (mode == NONE) {
           error("Not valid S-Expression file");
@@ -163,8 +223,7 @@ void translate(FILE *out, int convert_depth)
           tagname[taglen] = ch;
           ++taglen;
           break;
-        } 
-
+        }
 
         if (token_type == TOKEN_BEGINNING) {
           if (mode == PROPERTY) {
@@ -212,13 +271,18 @@ int main()
 }
 
 /*
+code version: v0.2
 
 must-be-done list:
 
-- comments support
-- strings support
+- support of html character entities, now they must be escaped like this:
+  &copy\;
 - much much better debugging needed
-- bugfix (error "property without value" sometimes displayed more than once)
+- bugfix: error "property without value" sometimes displayed more than once
+- bugfix: when there are white spaces between '(' and tag name,
+          and it's the root element it won't work
+          (cause first token is parsed differently than others)
+- more refined strings rules and debugging them
 
 other things to do:
 
@@ -227,5 +291,19 @@ other things to do:
 - some refactoring
 - php/xml/sgml compatibility
 - few predefined special tags
+- maybe debugging should be in seperate module?
+- string now behave very "preprocessor-like", they're fully pasted into code,
+  even with quotation marks, I am considering a change that they would work
+  like that only for values of properties
+
+difference between sehtml without and with strings
+   - v0.1 code:
+     (span :style "display\:inline-block;transform\:rotate\(180deg\);" &copy;)
+   - v0.2 code:
+     (span :style "display: inline-block; transform: rotate(180deg);" &copy\;)
+
+we weren't allowed to use spaces in our pseudo-string cause it will seperate
+pseudo-string into seperate tokens,
+every sehtml character must have been escaped before
 
 */
